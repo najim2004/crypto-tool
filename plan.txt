@@ -1,0 +1,835 @@
+Crypto Intraday Signal Generator –
+Implementation Plan
+Project Overview and Goals
+This project aims to build a personal intraday crypto signal generation tool that produces 1–3 high-
+confidence trade signals per day. All trades are opened and closed within the same day (no overnight holds)
+to avoid overnight risk 1 . The system will leverage free resources: Binance’s public REST API for live
+market data and Google’s Gemini AI API (free tier) for AI-based signal scoring and reasoning. It will be
+implemented in Node.js (targeted for a Node developer) with a MongoDB (Mongoose) database for data
+storage and a Telegram bot for notification-based user interaction. Key objectives include:
+• High Accuracy Signals: Use multi-timeframe analysis and multiple technical indicators in confluence
+to generate only a few high-probability trade signals per day (avoiding overtrading).
+• Intraday Strategy: All positions are closed by end-of-day to mitigate overnight news risk 1 . The
+strategy operates mainly during high-volume market hours (e.g. London/New York overlap).
+• Robust Filtering: Incorporate market regime filters (trend vs range vs volatility) and session timing
+filters to screen out low-quality or risky signals (e.g. avoid choppy or illiquid periods).
+• Risk Management: Ensure each signal meets a minimum reward-to-risk ratio of 2:1 (potential
+reward at least twice the risk) 2 , with clear stop-loss (SL) and take-profit (TP) levels set for every
+trade.
+• AI Decision Support: Integrate the Gemini AI (Google’s LLM) to score each potential signal’s
+confidence and provide reasoning. The AI acts as a “second pair of eyes” to validate signals and
+reduce human biases 3 . The tool will prompt the AI with the current market context and technical
+conditions, then interpret its response (e.g. a confidence score and brief rationale) before finalizing a
+signal.
+By combining technical analysis with AI-driven insight, the tool seeks to maximize signal quality and trader
+understanding. Below is a comprehensive implementation plan covering the technical stack, system
+architecture, strategy logic, and module design.
+Technical Stack and Resources
+Programming & Runtime: Node.js (JavaScript/TypeScript) will be used for all components – chosen for its
+rich ecosystem and the user’s familiarity. The bot will run as a long-running Node service (on a VPS or local
+machine).
+Market Data API: Binance’s public REST API will provide real-time crypto market data. No WebSockets are
+used – instead, the tool will poll REST endpoints at an interval (~5–10 seconds). Endpoints like /api/v3/
+klines (for candlesticks) and /api/v3/ticker/price can be used to fetch price data. This polling
+approach simplifies implementation at the expense of a slight data delay, which is acceptable for a low-
+1frequency intraday strategy. Binance’s free API has generous limits (e.g. 1200 requests/minute), so polling a
+few symbols every few seconds is feasible.
+Technical Indicators: We will use a technical analysis library for Node.js to compute indicators like EMA,
+RSI, MACD, ATR, VWAP, etc., rather than writing them from scratch. Options include the
+technicalindicators npm package or the more modern “trading-signals” library which supports RSI,
+EMA, SMA, MACD and more with high precision
+4
+. Another option is tulind (Node.js wrapper for Tulip
+Indicators) for high-performance C-backed computations
+4
+. These libraries ensure reliable indicator
+calculations (with correct formulas and handling of edge cases) and support arbitrary timeframes. For
+example, trading-signals provides classes for indicators (EMA, RSI, etc.) that we can update with
+incoming price data and query for the latest values.
+Database: MongoDB will store persistent data (using Mongoose for schema modeling and easy queries).
+Mongo is schema-flexible and good for time-series or signal logging. We’ll store: - Historical price data
+(candles) for computing indicators (though this can also be held in memory or recomputed from API each
+time, caching in DB can speed up repeated calculations or backtesting). - Generated trade signals and their
+details (timestamp, indicators at signal time, entry/exit levels, AI score, outcome). This helps in analyzing
+performance later and ensuring signals are not duplicated. - Possibly configuration or state (e.g. last
+processed candle time, or to ensure only one trade open at a time if that’s a rule).
+AI API: Google Gemini API (via Google AI Studio) will be used for AI-based analysis. The free tier allows a
+substantial number of calls (e.g. 1,500 requests per day at 15 requests/minute) 5 , which is more than
+enough for a few signals daily. We will obtain a free API key from Google AI Studio and use Google’s official
+SDK ( @google/genai npm package) or simple HTTPS calls to the Gemini generateContent endpoint 6
+7
+. The model (e.g. gemini-2.5 – Flash or Pro depending on availability) will be prompted with our
+strategy’s context to output a confidence score and reasoning. The integration will be stateless (each
+request provides necessary context, since real-time streaming data is not accessible to the model 8 ). This
+usage aligns with Gemini’s intended use as an analytical assistant rather than an auto-trader 9 10 .
+Notification UI: A Telegram Bot will serve as the user interface, sending real-time notifications to the user
+when a trade signal is generated. We will use a Node Telegram bot library (such as node-telegram-bot-
+api or Telegraf ) to easily send formatted messages to a private chat. The bot token (from BotFather)
+and the target chat ID will be stored in config. The Telegram UI keeps the system simple – no need for a
+separate dashboard – and provides instant push notifications on mobile/desktop. Basic bot commands can
+also be implemented (e.g. /status to query current position or last signal, /performance to get
+summary stats, etc.).
+Other Libraries: HTTP client (like Axios or Node Fetch) for calling REST APIs, Mongoose for MongoDB, and
+possibly a scheduling library ( node-cron ) or simply setInterval for the polling loop. If time/
+timezones need handling for session filters, a library like moment-timezone can help determine UTC vs
+local times.
+Environment & Deployment: The bot can run on any Node.js environment. For reliability, deploying on a
+cloud VM or server (DigitalOcean, AWS, etc.) that runs 24/7 is recommended. PM2 can be used to keep the
+Node process alive. All API keys (Binance not needed for public data, but Gemini API key and Telegram
+token) will be kept in environment variables for security.
+2System Architecture
+The system follows a modular architecture with distinct components for data collection, signal analysis, AI
+evaluation, and notification. Below is a high-level flow of how data and decisions move through the system:
+1. Market Data Poller: A module periodically calls Binance REST APIs to fetch the latest market data
+(candlestick updates on multiple timeframes). For example, every 5 seconds it might fetch the most
+recent 5-minute candle for the instrument of interest (e.g. BTC/USDT), as well as 15-minute and 1-
+hour data if a new candle on those timeframes has just closed. The data poller updates in-memory
+data structures or database records for these candles.
+2. Indicator Calculator: Using the fresh data, the tool computes the relevant technical indicators
+across multiple timeframes. This could involve maintaining indicator objects that update with new
+price/volume data or recalculating from scratch on each poll. Key indicators (EMA, RSI, MACD, ATR,
+VWAP, Volume MA, etc.) are calculated for 5m, 15m, and 1h periods as needed. For example, we
+might compute a 50-period EMA on the 1h chart for trend direction, a 14-period RSI on the 5m chart
+for short-term momentum, etc. Libraries ensure these calculations are accurate and fast.
+3. Strategy Evaluator: This module applies the trade logic rules to the latest indicator values and
+price context. It first checks market regime filters – e.g. determine if the market is trending or
+ranging (via ADX or similar), and if volatility is within acceptable bounds (via ATR). It also checks the
+session time. If the market is in a forbidden state (e.g. very choppy with no trend, or time is outside
+the trading session), the Strategy Evaluator will not generate any signal. If conditions look favorable,
+it then evaluates entry criteria on the multi-timeframe indicators. For instance: if the higher
+timeframe (1h) trend bias is bullish, and the medium (15m) timeframe confirms rising momentum,
+and a specific trigger condition occurs on the lower (5m) timeframe (like a bullish crossover or
+oscillator signal), then a candidate trade signal is formed. The signal includes proposed direction
+(buy/sell), entry price (current market price or close of signal candle), stop-loss and take-profit levels
+based on technical levels or ATR, and any notes about indicator conditions that led to it.
+4. AI Scoring Module: Before finalizing the signal, the candidate trade context is sent to the Gemini AI
+for evaluation. The module crafts a prompt including key details: e.g. “Instrument: BTC/USDT. 1H trend:
+Up (price above 50 EMA). 15m momentum: bullish MACD, rising volume. 5m trigger: Price just crossed
+above VWAP with RSI from oversold 30→40. Planned entry 35000, SL 34500, TP 36000 (R:R = 2:1).
+Question: Should we take this trade? Give a confidence score (0-100) and reasoning.” The AI (Gemini) will
+reply with a structured answer, for example: “Confidence 85/100 – This long trade aligns with the higher-
+timeframe uptrend and the entry after a pullback is reasonable. The stop loss is tight below support (recent
+swing low) and take-profit is feasible given today’s volatility. Volume spike confirms the breakout. I would
+take this trade.” The AI module parses this response, extracting the confidence score (85) and
+rationale text. This step adds an extra layer of validation and explanation, leveraging Gemini’s
+ability to synthesize the data and “think” through the trade setup 3 . If the AI’s confidence is very
+low (beneath a threshold we set, say 50/100), the system might choose to discard the signal as
+potentially unreliable. If the score is moderate, the system could still proceed but flag the lower
+confidence.
+35. Signal Dispatcher: When a trade signal passes all checks (strategy conditions and AI confirmation),
+it is handed to the dispatcher to execute the final actions. Since this tool is for signal generation
+(not auto-execution on exchange), “execution” here means:
+6. Logging the Signal: Save the signal details to MongoDB (symbol, timestamp, entry, SL, TP, indicators
+state, AI score, etc.). This persistence allows performance tracking and debugging later.
+7. Telegram Notification: Format a message to the Telegram bot to notify the user in real-time. The
+message will include all relevant info: e.g. “ Buy Signal – BTC/USDT @ 35000. Trend up on 1H; 5m
+breakout above VWAP. SL: 34500, TP: 36000 (R:R = 2:1). Confidence: 85/100. Reason: Uptrend confirmation
+and volume spike per AI.” The reasoning from the AI can be included in a concise form to help the
+user understand why the trade is recommended. The message can use Markdown to highlight key
+numbers. The bot can also tag the message as an alert.
+8. Position Tracking: (Optional) If we were automating trades, this is where an order would be sent to
+Binance. In this personal-use scenario, we assume manual execution by the user, but the system
+might still track an “open trade” state for each signal. This way, it can later send an alert when the TP
+or SL would have been hit or when end-of-day is near to remind closing. Tracking can be done by
+monitoring live price after a signal; however, since all positions are closed by day’s end, at minimum
+we will send an alert near the market close to close any open trade.
+9. End-of-Day Reset: At a defined end-of-day cutoff (e.g. UTC midnight, or a specific hour like 4:00 PM
+New York if aligning with equities, depending on how we define the trading session), the system will
+close out the trading session. This involves checking if any trade is still “open” (based on signal and
+subsequent price movement). If yes, a Telegram message will notify to exit the position at market
+price (or the system just marks it as closed). This ensures no positions carry overnight. Closing all
+trades each day is a deliberate strategy to avoid unpredictable overnight moves and gap risk 1 ,
+making the strategy purely intraday.
+Each of these components will be implemented as separate modules or classes in code, allowing clean
+separation of concerns. Next, we’ll dive deeper into each aspect, starting with data handling and indicator
+analysis.
+Market Data Polling (Binance API)
+To obtain real-time market data without websockets, the tool will use a REST polling loop. We will configure
+one or more symbol pairs to track (initially likely one, e.g. BTC/USDT, for simplicity). The polling strategy:
+• Interval: Poll every 5–10 seconds continuously during the trading session. This interval is a trade-off
+between data freshness and API usage. 5s ensures we catch moves promptly but still avoids hitting
+API limits. Binance’s API limits are high enough that a request every few seconds is fine (e.g. 12
+requests/minute is negligible compared to the 1200/minute limit). We will also use efficient
+endpoints to minimize data size – e.g., to update the latest candlestick, we can query only the last
+candle or use the limit=1 parameter on the klines endpoint for the latest completed candle.
+• Candlestick Data: We need multiple timeframes (5m, 15m, 1h) for analysis. There are two ways:
+4• Parallel Requests per timeframe: e.g., every 5 seconds, call Binance /klines for 5m data
+(perhaps the last N=100 candles to compute indicators), and similarly for 15m and 1h. This is
+straightforward and each call is lightweight (small JSON of latest candles). We check if a new candle
+has closed (by looking at the timestamp of the last candle) and update our calculations accordingly.
+This approach may duplicate data across calls but is simplest.
+• Hierarchical polling: Poll the 1h data less frequently (since it updates once an hour), 15m data every
+15 minutes, and 5m data every 5 minutes. However, implementing different schedules adds
+complexity. Since the API calls are not heavy, it’s acceptable to poll all needed data frequently and
+just ignore if nothing changed. We will likely go with polling all at the same base interval for
+simplicity, but only trigger indicator recalculations when a candle is actually new/updated.
+• Data Handling: The retrieved candlestick JSON includes open, high, low, close, volume, timestamps,
+etc. We will convert that into our internal Candle model objects. If using MongoDB, we might store
+these candles in collections (e.g., a collection for each timeframe) as they come in, or maintain an in-
+memory array of recent candles for indicator computation (persisting only periodically or for
+backtesting). Storing every 5s tick is unnecessary – storing the closed candles (every 5m etc.) is
+sufficient for historical record. We can use Mongoose schemas like:
+const CandleSchema = new Schema({
+symbol: String,
+interval: String,
+time: Date,
+open: Number, high: Number, low: Number, close: Number, volume: Number
+});
+with unique index on (symbol, interval, time) for quick upserts. But for runtime calculation, we might
+just keep the last N bars in memory.
+• Synchronization: The polling loop will run as a single thread using setInterval or an async loop.
+We must ensure an iteration completes before the next one starts (to avoid overlapping calls). If an
+API call sometimes takes longer, we might adjust the interval slightly above the average response
+time. Overall, Binance’s REST is quite fast for single-symbol queries.
+• Error Handling: We will implement retries or error catches – if a REST call fails (network glitch or API
+error), log the error and skip that cycle (try again on the next interval). Occasional missed data points
+are not critical, but if a call fails we may extend the next interval to avoid rapid retry. We’ll also watch
+for API rate-limit errors (HTTP 429); if that occurs, we back off and ensure we’re not exceeding limits.
+By consistently polling and updating data, the system will have near-real-time candlesticks on which to base
+indicators. With this foundation, we move to calculating technical indicators on the fetched data.
+5Data Storage (MongoDB via Mongoose)
+MongoDB will primarily act as a historical data and signal log. The rationale for using a database in this
+personal tool is to enable persistence and analysis:
+• Storing Historical Candles: As the bot runs, it can accumulate historical candlestick data for the
+chosen symbol and timeframes. This is useful for backtesting and for the AI’s context if we ever want
+to feed a series of recent data points. However, since the Binance API can be queried for historical
+data on demand, storing every candle is optional. We may just cache the most recent candles in
+memory for indicators, and only log events (signals). To keep things simple, the initial
+implementation might not store every price tick – instead, it might fetch needed history at startup
+(e.g. last 100 candles for each timeframe to initialize indicators) and then keep updating in memory.
+• Logging Signals and Trades: Every generated signal will be inserted into a MongoDB collection, e.g.
+signals . A Mongoose Signal schema could include:
+• timestamp (Date)
+• symbol (String)
+• direction (String: "LONG" or "SHORT")
+• entryPrice , stopLoss , takeProfit (Number)
+• timeframeContext (object storing maybe the values of key indicators at that moment on each
+timeframe, for record)
+• aiConfidence (Number)
+• aiReason (String)
+• status (String: "Open", "Hit TP", "Hit SL", "Closed EOD", etc.)
+• pnl (profit/loss outcome, computed after closure)
+This log lets us evaluate how the strategy performed over time (win rate, average R:R realized, etc.) and also
+see if AI’s confidence correlates with success. We’ll include a unique ID for each signal (MongoDB ObjectId
+or custom) which can also be used as part of a Telegram message to reference it (for example, “Signal
+#ID123 triggered”).
+• Storing Configuration: The database can also store user preferences or strategy parameters if we
+want a dynamic configuration (for instance, enabling/disabling certain filters without code changes).
+But this might be overkill for now; a simple config JSON or environment variables can suffice for
+static parameters like session time or indicator periods.
+• Using Mongoose: Mongoose will help define schemas and model classes for Candles and Signals. It
+provides an easy way to query data (e.g. find the last signal, or get all signals from last week for
+analysis). We should be mindful that frequent writes (e.g. writing every new 5m candle) could slowly
+bloat the DB; but one symbol’s 5m candles is at most ~288 per day, which is fine. Signals are even
+fewer. Mongo can easily handle this volume, and we can set up periodic cleanup if needed (like
+deleting very old candles if storage is a concern, or archiving data).
+• Performance: The app’s core logic mainly runs in memory, so database operations are not
+performance-critical (they’ll be asynchronous and relatively infrequent). We will ensure that writing
+6to the DB (especially signal logs) does not block the main loop – using async writes or queuing them
+if necessary.
+In summary, MongoDB provides durability (so that if the bot restarts, we have a record of past signals or
+can resume without losing state) and a foundation for analyzing the strategy’s efficacy. With the data layer
+covered, we proceed to the heart of the system: the strategy logic with multi-timeframe technical analysis.
+Multi-Timeframe Indicator Analysis
+The strategy employs multiple timeframe analysis to improve decision quality, a well-known technique
+where a higher timeframe gives context and a lower timeframe provides precise entry signals 11 . We will
+use three timeframes in concert: 1-hour (high), 15-minute (medium), and 5-minute (low). This aligns with
+common day-trading practices (e.g. using 1H and 5m for classic day trading) 12 . The rationale is that by
+waiting for alignment across timeframes, we trade in the direction of the broader trend while timing
+entries on short-term patterns, which statistically improves success and reward/risk 13 .
+Higher Timeframe (1H) – Trend Direction & Major Levels: The 1-hour chart is used to determine the overall
+trend or bias for the day. We’ll apply indicators like: - EMA (Exponential Moving Average): e.g. 50-period or
+100-period EMA on 1H. If price is consistently above the 50 EMA and the EMA is sloping upward, the trend is
+considered bullish (uptrend); below a falling EMA indicates a downtrend. This acts as a simple trend filter. -
+Market Structure: We could also identify key support/resistance on 1H or whether the latest swing high/
+low was broken, but to keep it indicator-based, we might skip manual S/R for now. Optionally, the tool
+might detect 1H chart patterns or breakout levels, but that’s advanced. - ADX (Average Directional Index):
+This indicator (14-period by default) measures trend strength regardless of direction 14 15 . We can use
+ADX on 1H to ensure the trend (if any) is strong: e.g. ADX above 25 typically confirms a strong trending
+environment 16 17 . If ADX is low (<20), it implies the 1H is sideways/ranging, so any trend-following
+signals should be doubted or not taken. This overlaps with Market Regime filters (discussed later), but it’s
+computed here.
+From the 1H analysis, we derive a bias: bullish, bearish, or no-trend. The strategy will only take trade
+signals in the direction of the higher timeframe trend. For example, if 1H trend is up, we only consider
+long (buy) entries on lower timeframes and ignore short setups (and vice versa for downtrend). If 1H has no
+clear trend (ADX low or conflicting signals), we may choose to stand aside or require extra confirmation for
+any trade.
+Medium Timeframe (15m) – Momentum & Confirmation: The 15-minute chart provides a more granular view
+of intraday movements and helps avoid false signals by confirming that the intermediate trend aligns with
+the 1H. Indicators on 15m may include: - MACD (Moving Average Convergence Divergence): A classic
+momentum oscillator. We’ll use the histogram or line crossover on 15m to gauge momentum direction. For
+example, if 1H trend is up, we’d like to see the 15m MACD histogram >= 0 (indicating bullish momentum) or
+a bullish MACD line crossover (MACD line crossing above signal line) as a confirmation that momentum
+supports an upside move 18 19 . Similarly, in a downtrend we’d prefer MACD showing downward
+momentum. - VWAP (Volume Weighted Average Price): On a 15m scale, VWAP can act as a dynamic
+intraday support/resistance – prices above VWAP mean buyers have control on average, below means
+sellers in control. For a long bias, price being above 15m VWAP is a good sign (or crossing above VWAP can
+be a signal). We might require that any long entry must be above the daily VWAP to ensure we’re not buying
+at an overpriced level relative to the day’s mean 20 . - Volume Moving Average: We can maintain an
+7average of volume (e.g. 20-bar MA of volume on 15m) to detect unusual volume spikes. A breakout
+accompanied by volume greater than the average by some factor adds confidence that the move is genuine
+(this is a volume confirmation filter). We’ll use this concept in triggers. - RSI (Relative Strength Index): We
+might check RSI(14) on 15m to ensure we’re not buying when 15m RSI is extremely overbought (>70) or
+selling when oversold (<30). For instance, in an uptrend, if 15m RSI is above 70 (overbought), we might hold
+off entering a long because a pullback could be due; if RSI is mid-range or coming up from an oversold
+condition, better. This prevents chasing exhausted moves.
+The 15m timeframe thus acts as a bridge: it should generally agree with the 1H bias (e.g. if 1H uptrend, the
+15m should not be in a strong downtrend; ideally it’s also trending up or at least flat but turning up). If 1H
+and 15m conflict significantly, we’ll be cautious. Often, if 1H is up but 15m had a recent pullback, that can be
+ideal: the 15m indicators may show a temporary dip (e.g. RSI was oversold, MACD negative but bottoming)
+and then we wait for them to turn back up – that yields an entry on the 5m.
+Lower Timeframe (5m) – Entry Trigger: The 5-minute chart provides the precise entries and short-term price
+patterns to act on. It’s where we combine everything for a signal. Indicators and signals on 5m: - Moving
+Averages or VWAP: We can use a short-term EMA on 5m (like 9 EMA or 20 EMA) as a trigger in combination
+with VWAP. For example, a bullish trigger might be when price crosses above the 5m 20-EMA and above
+the VWAP line at the same time, after previously being below them. A crossover of price above VWAP
+suggests a intraday trend shift upward 20 . We ensure this aligns with higher timeframe bias (only take if
+1H trend is up). - MACD & RSI on 5m: Similar to 15m but faster – we could require 5m MACD histogram flips
+positive or MACD line crosses up, to signal momentum on the immediate term has turned bullish. RSI(14)
+on 5m should not be overbought at entry; in fact, an ideal scenario is bullish divergence or oversold
+bounce on 5m in an uptrend. For instance, price makes a higher low while 5m RSI was <30 (oversold) and
+then rises above 30, which could be the moment to enter. - ATR (Average True Range): On 5m, ATR gives a
+sense of recent volatility in absolute price terms. We’ll use 5m ATR value primarily for setting the stop-loss
+distance (e.g. 2 * ATR(5m) might define our stop). But ATR can also act as a volatility filter: if ATR is extremely
+high relative to typical (meaning the market is swinging wildly), it might be a “volatile” regime where risk is
+higher. In such cases, we might choose to skip signals or use a wider stop. More on ATR in Regime filters
+next. - Candlestick Patterns: If needed, we can incorporate simple price action patterns on 5m. For
+example, a strong engulfing candle off a support, or a small consolidation breakout. However, coding
+pattern recognition can be complex; many strategies rely solely on indicator conditions which implicitly
+capture patterns. We likely will not explicitly code candlestick patterns beyond what indicators tell us.
+By evaluating these indicators together, the strategy ensures multiple confirmations before signaling a
+trade. An example Long Setup combining these could be:
+• 1H: Price above 50 EMA and +DI > -DI with ADX = 30 (strong uptrend) 16 .
+• 15m: Price just crossed above its VWAP; MACD just turned green (histogram > 0) after a shallow
+pullback; 15m RSI was around 40 and is now ticking up (so not overbought).
+• 5m: A bullish 5m candle closed above both the 5m 20-EMA and the VWAP, with volume on that
+candle 2x the 5m average volume 21 . 5m RSI crossed above 30 from below, but is still <70 20 . This
+suggests a strong push off a support with rising momentum.
+• If all the above happened around 14:00 UTC (during the desired session), the strategy flags a Buy
+signal. Stop-loss might be set just below the recent swing low that coincided with the pullback (which
+might be, say, 0.5% below entry, roughly 1 ATR(5m) distance), and TP set at a level that is ~1% above
+entry (achieving 2:1 R:R given 0.5% stop).
+8• The signal goes to AI for verification (the AI might note the confluence of factors and high volume as
+positive).
+Such confluence dramatically improves reliability — using multiple indicators and timeframes in
+agreement filters out many false signals that a single indicator might produce 22 . As noted in one strategy,
+“multiple technical indicators cross-validation improves signal reliability” 22 . However, there is a trade-off:
+waiting for so many conditions means signals are infrequent and sometimes entry is delayed (the move
+might be partly underway) 23 . That’s acceptable here since the goal is quality over quantity (1–3 signals/
+day).
+We will be careful in implementation to avoid “confirmation bias” (all indicators essentially telling the same
+thing). The chosen indicators should complement each other: - EMA or MACD for trend direction, - RSI for
+overbought/oversold extremes, - ATR/volume for volatility confirmation, - VWAP for price relative to
+average. This combination covers trend, momentum, and mean reversion aspects.
+All indicator calculations will be updated continuously as new candle data comes in: - For efficiency, we can
+update rolling indicator values rather than recompute on every tick. The trading-signals library, for
+example, allows feeding new price data into an EMA or RSI calculator incrementally. - We will ensure the
+indicators are using closed candle values to avoid acting on partial data that can repaint. E.g., only consider a
+5m candle’s signal after it closes, not during its formation (since within the 5m period RSI or MACD could
+fluctuate).
+With the multi-timeframe indicator picture established, next we formalize the market condition filters
+(trend vs range vs volatile) and session filters that gate these signals.
+Market Regime and Session Filters
+Even a sound indicator setup can generate bad signals in the wrong market conditions. Two major factors
+we’ll filter by are the trend regime (trending vs ranging market) and volatility level. Additionally, we only
+want to trade during the most liquid hours of the day. Implementing these filters will further avoid
+whipsaws and low-probability periods:
+Trend vs Range Filter (Trend Strength)
+This uses metrics like ADX or directional movement to assess if there is a clear trend: - As mentioned, ADX >
+~25 on the higher timeframe indicates a strong trend in place 16 17 . We will likely use ADX on 1H (or
+perhaps 15m for more responsiveness) to classify the environment: - If ADX is well below 20, the market is
+range-bound (no strong trend). In such cases, a trend-following strategy (like buying breakouts) has a
+higher chance of failure (false breakouts) 17 . We might then either avoid trading altogether or switch to a
+different tactic (mean-reversion) if we had that coded. Given the complexity, the safer approach is to stand
+aside when no trend. - If ADX is high (above 25 and rising), a trend-following approach is suitable – we
+proceed with signals in the trend direction 16 . We should note extremely high ADX (>50) can indicate an
+overextended trend that might soon correct 16 24 . In such a case, we can still trade but perhaps be more
+aggressive taking profit or ensure our stops are trailed. This nuance might be added later; initially, just
+checking >25 vs <20 is a good filter. - Another measure: the relationship of multiple EMAs. If using two EMAs
+on 1H (say 50 and 200), when they are widely separated and in order (50 above 200 in an uptrend), that also
+9confirms a strong trend. If they’re crisscrossing frequently, that’s a ranging market. This could supplement
+or substitute ADX if needed.
+In implementation, after each data update we compute ADX(14) on 1H and possibly on 15m:
+if (adx1h < 20) trendCondition = "range";
+else if (adx1h >= 25) trendCondition = "trending";
+else trendCondition = "weak_trend";
+We then require trendCondition === "trending" to take normal signals. If range, we mostly skip.
+(Alternatively, if we wanted, we could have a range-trading mode where we do the opposite – sell at upper
+range, buy at lower – but that’s outside scope).
+Avoiding Choppy Markets: This filter will save us from times when indicators give mixed signals because
+price is just oscillating in a flat range. As noted in a reference strategy, “introduce ATR for dynamic TP/SL and
+add trend strength filters to reduce false signals in choppy markets” 25 . We are doing exactly that: trend
+strength (ADX) filter to reduce false breakouts in weak trends 26 .
+Volatility Filter
+We define what “volatile” means in context: - We use ATR (Average True Range) on a relevant timeframe
+(maybe 15m or 1H) to gauge volatility. ATR gives an average range of price movement. We can compare the
+current ATR to a longer-term ATR or to the asset’s price: - For example, if 15m ATR is 1% of price (a quite big
+swing for 15m BTC), that’s high intraday volatility. Or if 1H ATR is the highest it’s been in weeks, that
+indicates unusually big moves (could be news-driven). - Another simple approach: take the ratio of ATR to
+some recent moving average of ATR. E.g., if ATR(14) on 15m is more than 2x the 50-period ATR average, the
+volatility is surging. - If volatility is extremely high, the risk of stop-loss being hit randomly is higher, and
+spreads or slippage might be worse. The strategy might then either skip trades or adapt: - We could widen
+the stop distance (e.g., use 2ATR instead of 1ATR for SL) to account for bigger swings, but that also requires
+a larger target to maintain R:R. This adaptation was suggested in some strategies to handle volatility 27 . -
+Or simply avoid new entries during a volatility spike (e.g., right after a major news event when ATR shoots
+up). - On the flip side, if volatility is too low (tiny ATR), the market may be stagnant and not worth trading
+either (because there’s not enough movement to hit targets). However, low volatility usually correlates with
+ranges anyway.
+For implementation, we’ll likely check 15m ATR:
+let atr = computeATR(15m);
+if (atr > highVolThreshold) volatile = true;
+We define highVolThreshold by analyzing typical ATR values or a multiple of average ATR. This may
+require some calibration with historical data. For example, if BTC’s 15m ATR is normally ~50-100$ but
+suddenly it’s 300$, that could be a threshold.
+10In summary: - If extremely volatile: pause trading or be very selective. - If extremely quiet: perhaps also
+avoid, since quiet often precedes volatility bursts that are unpredictable. But our session filter usually
+avoids the quietest times (overnight).
+Session (Time-of-Day) Filter
+The strategy will only operate during the overlap of London and New York market hours, as specified.
+Crypto trades 24/7, but liquidity and volatility are not uniform throughout the day. The London+NY overlap
+(roughly 13:00–17:00 UTC) is known to be the most active period, often with the largest moves and volume
+28
+29 . A crypto trader observed, “The overlap with New York (8–11 AM EST) is wild; it’s when volume peaks,
+with 2–5% price swings on Bitcoin” 30 . We target this window for higher probability trades: - We will
+configure the system’s active trading window in UTC (for example, 12:00 to 17:00 UTC to cover a bit before
+and after the core overlap). - The polling and analysis can run all day, but the Strategy Evaluator will simply
+not trigger any trades outside the allowed session. If a perfect signal appears at 3 AM UTC, the system will
+ignore it by design (less reliable due to lower participation from major markets). - We can send a daily
+“Session start” and “Session end” message via Telegram for transparency. E.g., at 13:00 UTC, “Trading
+session started (London/NY overlap) – signals will be evaluated now,” and at 17:00 UTC, “Session ended – no
+more trades today.” - All open positions will be closed by session end (which is effectively end-of-day for us).
+If an instrument is highly active outside these hours (say some crypto is influenced by Asia open at 00:00
+UTC), we might miss a trade, but that’s acceptable given the strategy constraints.
+Implementation detail: We’ll use JavaScript Date to get current hour in UTC and compare. Could also use
+moment.tz if running on a local machine in another timezone to avoid confusion. It might look like:
+let nowUTC = new Date();
+let hour = nowUTC.getUTCHours();
+if (hour < 12 || hour >= 17) {
+// outside 12:00-17:00 UTC
+skipTrading = true;
+}
+Additionally, if needed, we can refine around weekends or specific days, but since crypto is 24/7, we might
+still allow weekends. (Volume may be lower on weekends but crypto can move, yet institutional involvement
+is lower – something to consider. For now we don’t explicitly exclude weekends, but the user can if desired.)
+Using the session filter ensures we trade when institutional and high-volume players are active, increasing
+the likelihood of robust moves and less erratic behavior 29 30 . It also naturally limits the number of
+signals per day (since only ~4 hours of data are watched intensively).
+By combining the above filters: - Only trade in trending markets, aligned with the trend. - Avoid trades in
+ultra-volatile spikes or ultra-flat doldrums. - Only trade during peak hours.
+These conditions significantly increase the signal quality by providing context: for example, a breakout
+during 14:00 UTC in a trending market with confirming volume is far more likely to succeed than a breakout
+at 3:00 UTC in a random range. Now, let’s detail how we define the trade entry and exit rules, including
+stop-loss and take-profit, which ensure a proper risk-reward structure.
+11Trade Entry & Exit Strategy
+This section outlines the precise rules for entering a trade (taking a signal) and exiting it, either via profit
+target, stop-loss, or end-of-day liquidation. We already covered many entry criteria in the multi-timeframe
+analysis; here we’ll summarize them in a structured checklist form for clarity, and then discuss exit rules and
+trade management.
+Entry Criteria Summary (Example for Long Trade)
+All of the following conditions must be true to trigger a Long entry signal: 1. Session Time: Current time is
+within allowed trading hours (e.g. 13:00–17:00 UTC). 2. Market Regime: 1H ADX >= 25 indicating a trend,
+and the 1H trend direction is UP (price above long EMA, higher highs, etc.) 16 . We are only looking for
+longs in an uptrend. If 1H trend is down or no trend, no long trade. 3. 15m Confirmation: 15m chart shows
+bullish signs: - Price on 15m is at or above its VWAP line (market sentiment intraday is bullish) 20 . - 15m
+MACD histogram is green (>= 0) or a bullish MACD crossover has occurred recently 18 . - 15m RSI is below
+the overbought threshold (e.g. RSI < 70) 31 , ideally rising from a value < 50. (We avoid entering if RSI(15m)
+already > 70 as it could mean the move is near exhaustion.) - (Optional) The last 15m candle or two have
+higher volume than average, indicating interest. 4. 5m Trigger: A concrete trigger on 5m: - A 5m candle
+closed above key moving average(s) (e.g. above 20 EMA which might also be crossing above 50 EMA – a
+short-term bullish crossover). - Price also crossed above 5m VWAP in the same move (if it wasn’t already
+above). - 5m MACD flips bullish (histogram from negative to positive on that close) or 5m RSI crosses above
+a midpoint like 50 from below, showing momentum shift. - Volume on the breakout candle is significantly
+higher (e.g. 2x the 5m avg volume) 21 , confirming participation in the move. - No nearby major resistance
+just overhead (this might be discretionary, but e.g. ensure the entry isn’t happening right below a known
+daily resistance – we might incorporate a check if price is not within say 0.5% of the day’s high or a known
+level, to avoid late entry. This can be a future enhancement.) 5. Risk-Reward Check: Given a logical place
+for the stop-loss (see below) and a reasonable target, the ratio of reward to risk is at least 2:1 2 . If not, we
+do not take the trade, since it wouldn’t meet our risk/reward criterion. This could happen if, for example, the
+nearest resistance (target) is too close or the stop needed is too large – skip such trades. 6. AI
+Confirmation: The AI module gives a confidence score above the threshold (e.g. >70/100). If the AI says the
+setup is dubious or gives a very low score, we reconsider or skip. This is our final sanity check.
+Only if all conditions are satisfied do we generate the Buy signal and notify. For a Short trade, the criteria
+mirror the above in reverse: - Session time in window. - 1H downtrend confirmed (price below EMA, ADX
+strong) – we only short in confirmed downtrends. - 15m showing bearish momentum (price below VWAP,
+MACD histogram <= 0, RSI not oversold <30) 32 . - 5m trigger: perhaps a break below a support or a moving
+average cross down with high volume, 5m RSI from overbought downwards, etc. - R:R >= 2, and AI agrees. -
+Then a Sell signal is issued.
+This structured approach yields few trades but each with multiple layers of confirmation, aligning with the
+philosophy of quality over quantity for day trades.
+Stop-Loss (SL) Placement
+For each trade, a stop-loss level is defined immediately: - Generally, SL will be placed below a logical
+support for longs (or above a resistance for shorts). Often this can be the low of the breakout candle or the
+recent swing low on 5m/15m that prompted the entry. For example, if we buy after a pullback, the stop
+12might go a bit below the pullback’s lowest point. - We incorporate ATR to account for volatility: e.g., if 5m
+ATR is $50, we might place SL at least 1×ATR below the key level to avoid being wicked out by normal noise
+27 . In volatile conditions, maybe 1.5×ATR. - Another method: percentage-based SL. For instance, the
+strategy reference used 0.25% stop for BTC 33 34 (just as an example), but we’ll prefer ATR or structure-
+based stops rather than a fixed percent, to adapt to conditions. - The SL is typically tighter in an intraday
+context because we want small losses when wrong. However, not so tight that normal 5m fluctuation hits it.
+This balance can be fine-tuned via backtesting. - Once placed, the SL is not moved unless perhaps to trail in
+profit (we might later implement trailing stops or break-even moves after some profit, but initially, we’ll
+keep it fixed to the initial value to simplify logic).
+We emphasize discipline: a pre-defined SL helps ensure we keep losses small and controlled, a
+fundamental of risk management 2 .
+Take-Profit (TP) and Reward:Risk
+A take-profit level is set such that the expected reward is at least twice the risk distance: - If SL is, say, $100
+below entry, TP should be at least $200 above entry (for a long) to meet 2:1 R:R 2 . We can set TP at 2×SL
+distance by default. However, if a clear resistance level lies at +1.5× risk, we might adjust – but that would
+drop R:R to 1.5, which isn’t ideal. In those cases either skip trade or set TP beyond resistance hoping it
+breaks (or plan to partial out at resistance). - Often, intraday trades can target a retest of a prior high or low.
+For example, if we bought a dip, TP might be the previous day’s high or the morning’s high. We should
+ensure that target is reasonable within the day’s volatility. - If conditions are very favorable (strong trend
+day), sometimes larger R:R can be achieved (3:1 or more). But we will at least require >=2:1. This ensures
+even if only ~50% of trades succeed, we’d still be profitable overall 35 .
+We will encode this R:R check explicitly so that no signal is sent unless potentialReward >= 2 *
+potentialRisk
+2
+. This might involve computing a tentative SL and TP and evaluating them before
+finalizing the signal.
+Trade Management and Exit Rules
+Since this bot primarily signals trades rather than executing, active management is minimal from the bot’s
+perspective, but we will still simulate or advise on management: - If a trade hits the stop-loss price, we
+consider that trade closed at a loss. The bot can log this outcome (if tracking live prices via continued polling)
+and optionally send a Telegram update: “Stop-loss hit, exiting trade.” In practice, the user should have
+executed a stop or be watching. - If price hits the take-profit, similarly mark closed at profit and notify:
+“Target hit, trade closed.” - If neither SL nor TP is hit by a certain time (end of session/day), then at the
+session end we close the trade. For example, at 16:45 UTC, if a trade is still open, we either use the last price
+as the exit or assume the user closes at market. A Telegram message would say: “End of day – closing
+position at market (price X).” - The strategy doesn’t carry trades overnight, as mandated. No Overnight Risk
+is a key advantage of intraday trading 1 , so even if the trade hasn’t reached TP, we’d exit to avoid unknown
+overnight events.
+Optionally, we might include a trailing stop mechanism for when a trade is in profit: - E.g., once price
+moves in favor by 1× risk, move SL to break-even. Or trail below 15m candles. This can lock in some profit
+and protect against reversal. However, trailing stops can also cut winners short. We might experiment with
+this after initial implementation. - For simplicity, initial version: fixed SL and TP, no trailing.
+13We will document in the Telegram signal what the SL and TP are so the user can manage it accordingly. The
+bot’s primary role is to signal and advise, not manage execution, but it provides these levels for the user’s
+benefit.
+Example of a Completed Trade Signal
+Signal: “BUY BTC/USDT @ 35000; SL 34750; TP 35500; R:R = 2:1” (plus a short rationale). - The user sees this
+on Telegram, optionally along with: “Confidence 80 – Uptrend with momentum, expecting a bounce to daily
+high. Place stop below local support.” - The user enters the trade accordingly. Over the next hour, BTC indeed
+rises and hits 35500. - Exit notification: The bot, seeing price >= 35500, sends: “ Target hit at 35500. Trade
+closed for +1.4% gain.” If it hit SL instead: “ Stopped out at 34750 (-0.7%).” - The day ends, and any open
+trade is closed if not already.
+All these rules enforce a systematic approach: plan the trade and trade the plan – entry and exit defined
+in advance 2 , no guessing. It also ensures we are not holding hoping for bigger gains or refusing to cut
+losses, which is crucial for consistency.
+With entry/exit strategy established, we now integrate the AI (Gemini) into the process for confidence
+scoring and reasoning.
+AI-Based Signal Scoring (Gemini API Integration)
+A standout feature of this tool is using Gemini AI (Google’s LLM) to enhance decision-making. The AI serves
+as a decision support system – it won’t execute trades, but it will analyze the proposed trade setup and
+provide a confidence assessment and rationale. This mimics having an expert second opinion on each
+signal, helping avoid poor trades and documenting the reasoning for each good trade.
+Role of Gemini AI
+Gemini can process large context and provide coherent analysis in text form. We’ll leverage it to: - Score the
+Signal: e.g. output a numeric confidence from 0 (very low quality setup) to 100 (very strong setup). This
+quantification can directly filter signals (require >= X to proceed). - Explain the Rationale: Summarize why
+the trade might work or not, referencing the technical factors. This explanation will be relayed to the user
+via Telegram, which is educational and increases transparency/trust in the signal. - Check for Oversights:
+The AI might catch things like “the trade aligns with trend but RSI is very high, caution on pullback” or
+“volatility is unusually high, risk of whipsaw” which adds nuance beyond our fixed rules. Essentially, it can
+incorporate a bit of human-like intuition or additional data (if provided).
+Prompt Design
+We will craft a prompt string that concisely describes the situation. For example:
+Analyze the following crypto trade setup and respond with a confidence score
+(0-100) and brief reasoning.
+Market: BTC/USDT
+14Time: 14:30 UTC
+Higher Trend: Uptrend (price above 50 EMA on 1H; ADX=30).
+Intraday Momentum: Bullish (15m MACD > 0; price above VWAP).
+Setup: A 5m candle broke above consolidation with high volume. Entry=35000,
+SL=34750, TP=35500 (Risk ~250, Reward ~500, R:R=2.0).
+Indicators: 5m RSI = 60 (not overbought), 15m RSI = 55, 1H RSI=65. 5m MACD just
+crossed up.
+Other: London/NewYork session active, Bitcoin news sentiment neutral.
+Question: Should this trade be taken? Provide a confidence score (0-100) and a
+one-paragraph rationale.
+The prompt gives Gemini all the key info: trend, momentum, entry/exit levels, indicator states, session
+context. We explicitly ask for a structured answer.
+We might instruct the model to format like: “Confidence: X/100. Reason: ...” to parse easily.
+Gemini’s long context capacity (up to millions of tokens in newer versions) means we could even feed
+recent price action data if needed, but likely just summarizing it as above is enough for our use-case 36 .
+We will use the Gemini API by calling the generateContent method via the Node SDK or REST. Since we
+only need text output, it’s straightforward. We ensure to set our API key and model name (e.g.
+gemini-2.5-*** ). The free tier might use the “Flash” (fast) model which should be sufficient. The API call
+returns a response object with the model’s text completion 37 , which we parse.
+Rate limiting: At 1-3 signals/day, we’ll only call Gemini a few times a day plus maybe some test prompts at
+startup – far below the free tier limit of 1500/day 5 . So no issues there.
+Interpreting AI Output
+Once we get the AI’s response: - We parse out the confidence number. We’ll define how it’s expected (we can
+even ask the AI to give just a number at the start). - We check it against a threshold. For example, threshold
+= 70. If AI gives 85 -> good to go; if it gives 40 -> likely skip the trade. - We also capture the text explanation.
+We may truncate if it’s too long (maybe limit to 2-3 sentences in the Telegram message). - The explanation
+often will highlight some pros/cons of the setup. This is valuable to the user and can also help us refine
+rules. For instance, if AI consistently points out an issue, maybe that’s a rule we should formalize later.
+It’s important to remember AI like Gemini does not have live access to data on its own; it only knows what
+we feed it in the prompt 8 . Thus, providing it the relevant data (trend, indicator values) is crucial. We also
+won’t blindly trust it – it’s an assistant. But Gemini is quite advanced in reasoning, and given the context, it
+should respond in a useful way (e.g., acknowledging the strong trend and proper R:R as positives, etc.).
+One benefit is that the AI might help avoid some trades that technically meet criteria but have subtle issues.
+For example, maybe the criteria are met but the move already happened (late entry). Our rules might not
+catch “late entry” explicitly, but the AI might say “This trade has lower reward left as price already moved a
+15lot”. If so, and it gives a low score, we filter it out. This adaptive insight is hard to encode purely in fixed
+rules.
+From a development standpoint, integrating the AI is straightforward using Google’s GenAI SDK:
+import { GoogleGenAI } from "@google/genai";
+const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const response = await client.models.generateContent({
+model: "gemini-2.5-...flash",
+temperature: 0, // we want a consistent output, not creative
+contents: promptText
+});
+const aiText = response.text;
+We’ll set temperature low to get deterministic, factual output (no randomness needed). We then parse
+aiText .
+We also handle errors (in case API is down or returns nothing). If AI fails, we can either proceed without it
+(maybe assume confidence or require manual confirmation). But since it’s central to our strategy, we likely
+prefer to have it. We could implement a fallback: if AI call fails, default to sending the signal with a note “AI
+evaluation unavailable, proceed with caution”.
+Example AI Response
+Given the example prompt, an ideal AI answer might be: “Confidence: 80/100. Reason: The trade aligns with
+the prevailing uptrend and has multiple confirmations (volume and indicators). The stop loss is placed reasonably
+tight below support, and the 2:1 reward-to-risk is met. There is moderate room to the upside (target near prior
+high). No major red flags, though RSI is somewhat high but not extreme. This is a solid setup.”
+We would parse 80 and the reason. The Telegram message to user could then include: “AI Score: 80 – Solid
+uptrend setup with multiple confirmations (high volume breakout, etc.). R:R=2:1 satisfies criteria.”
+The AI’s involvement also helps maintain trading discipline by enforcing reasoning. As noted by
+Cointelegraph/TradingView, Gemini can help manage trading discipline by structuring analysis and
+preventing chasing noise 38 . We effectively use it to avoid emotional or impulsive trades; every signal is
+vetted logically.
+Finally, all AI outputs and scores will be saved in the signal log as well. Over time, we can analyze how AI
+confidence correlates with win rate (maybe we find that trades scored <60 rarely succeed, etc., and adjust
+threshold accordingly).
+In summary, the Gemini AI integration provides: - An independent analysis layer to double-check the
+strategy’s signals. - A human-readable explanation for each trade (great for learning and trust). - The
+ability to adjust or cancel signals that might slip through our rule-based filter but are deemed poor by the
+AI’s more holistic view.
+16With the AI integrated, the core logic of the system is set. The next piece is tying it all together and
+interfacing with the user via the Telegram bot.
+Telegram Bot Notification Interface
+The Telegram bot will be the primary way the user receives and interacts with signals. It essentially acts as a
+real-time alert system, and can also accept simple commands from the user. Key design points for the bot
+interface:
+Signal Alerts
+When the system identifies a valid trade signal (after AI confirmation), it sends a detailed alert to a
+designated Telegram chat (likely a private chat with the user or a small group). - The alert will be a
+formatted Markdown message. For example:
+Buy Signal: BTC/USDT
+Time: 2025-01-10 14:30 UTC
+Entry: 35000 – Stop: 34750 – Target: 35500 (R:R = 2.0)
+Confidence: 85/100 (AI-backed)
+Reasoning: Uptrend confirmed across 1H/15m. Breakout on 5m with high volume. Indicators align, offering
+a 2:1 reward-to-risk opportunity 22 2 .
+This example message is clear and contains: - A rocket emoji for a buy (maybe a different emoji for sell, like
+). - The pair and signal type (Buy/Sell). - Timestamp (so the user knows recency, and it’s useful if they check
+later). - Entry, SL, TP, R:R ratio in bold numbers for quick reading. - AI confidence in bold, indicating it’s AI
+evaluated. - A one-line reasoning summary (which can be directly taken or slightly edited from the AI’s text).
+- We include citations in our documentation, but in the actual Telegram message we wouldn’t include
+references. However, the content itself is similar to what an analysis might include.
+The user, on seeing this, can decide to execute the trade manually on their exchange if they agree.
+We will also send exit alerts if we track the trade’s progress (which we might via continued polling of price
+after a signal): - E.g., “ BTC/USDT target hit at 35500 (+1.4%).” or “ BTC/USDT stopped out at 34750
+(−0.7%).” or “ BTC/USDT closed at 35200 end-of-day (+0.6%).” These help the user follow up. If we are not
+automating, the user might already know the outcome from their trades, but it’s good for logging and
+those not actively watching.
+To implement tracking, we can store the active signal, and on each poll check the current price vs that
+signal’s SL/TP. However, since crypto can move fast, polling every 5s is enough to catch it generally.
+Alternatively, we might not do this at first (just rely on user to monitor or use their own alerts) to keep scope
+small.
+User Commands
+We can implement some basic bot commands for convenience: - /start – Start the bot (Telegram usually
+requires a /start to initiate conversation). We can respond with a greeting and a summary of what the bot
+17does. - /status – Bot replies with current status: e.g. “No open trade. Last signal: BUY BTC at 35000, now at
+35200 (+0.5%). 2 signals sent today.” If a trade is open, it can show entry and current P/L. - /history – Could
+fetch recent signals from the DB and show a brief history (last 5 trades with outcomes). - /config – Possibly
+allow the user to query settings (like which symbol, what session times). - /pause or /resume – A safety
+feature if user wants to temporarily stop signals. Pause could set a flag in the system to not send any new
+signals until resumed.
+These commands would be handled by the bot library. For example, using Telegraf:
+bot.command('status', ctx => { /* fetch status and ctx.reply(...) */ });
+All the bot needs is network connectivity to Telegram (which is done via HTTPS long-polling or webhooks;
+for simplicity we might use polling here as well).
+Libraries and Best Practices
+Using Telegraf or node-telegram-bot-api: Both are well-documented. Node-telegram-bot-api is very
+straightforward for basic usage:
+const TelegramBot = require('node-telegram-bot-api');
+const bot = new TelegramBot(TOKEN, { polling: true });
+bot.onText(/\/status/, (msg) => { ... });
+bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+We will keep the Bot API token secure (not hardcode, use env var). The chat ID might be known (if it’s just
+the user’s chat). Or we can handle dynamically by letting the user send a command and capturing
+msg.chat.id , then storing that for sending alerts.
+Formatting: We’ll use Markdown or HTML parse mode to format bold/italics. We should test how it looks on
+mobile (especially the alignment of numbers, etc.). We avoid overly long messages; keep it to maybe 2-3
+short paragraphs max.
+Notifications: The user should ensure the bot is not muted in Telegram to get real-time alerts.
+Error handling: If Telegram send fails (maybe network issue), we can retry once. Usually, Telegram’s API is
+reliable. We just log if a message fails.
+Integration with System
+Whenever
+a
+signal
+is
+generated
+and
+verified
+by
+AI,
+the
+final
+step
+is
+telegramBot.sendMessage(chatId, formattedMessage) . Similarly for end-of-day summary or other
+info.
+18We might also push a daily summary at the end of the day: e.g. “Today: 2 signals, 1 win +1.4%, 1 loss -0.7%.
+Net +0.7%.” This helps the user keep track. This info can be derived from the DB logs.
+The Telegram interface ensures the user doesn’t need to continuously watch a screen or log – they get push
+alerts. It’s simple but effective for personal use.
+At this point, we’ve covered all major components and logic of the system. To wrap up, we’ll outline the
+overall module structure, development plan, and testing approach.
+Module Structure and Development Best Practices
+We will organize the code into logical modules for clarity and maintainability. A suggested breakdown: -
+app.js (Main Entrypoint): Initializes all components (DB connection, API clients, bot) and kicks off the
+polling loop. Also handles global error catches. -
+dataFetcher.js : Functions to call Binance API
+endpoints (e.g. fetchCandles(symbol, interval, limit) returns candle data). Could use Axios for
+requests. Also might handle transforming raw data to Candle objects. - indicatorCalc.js : Sets up and
+updates technical indicators. For example, it might initialize indicator instances (from the chosen library) for
+each needed indicator and timeframe. Provides a function updateIndicators(latestCandles) that
+recalculates or updates the values. Returns an object with current indicator values used by strategy. -
+strategy.js : Contains the logic for determining if a signal is present. Exposes
+checkForSignal(indicators) which implements the entry criteria logic (possibly broken into sub-
+functions: isTrendingUp , isValidBreakout , etc.). It uses the current indicators + maybe stored
+previous values to detect events like crossovers or volume spikes. If conditions met, it constructs a
+signal object (with entry, SL, TP, etc.) and returns it; otherwise returns null. - aiEvaluator.js :
+Handles communicating with Gemini API. Has function scoreSignal(signal) that forms the prompt
+from the signal and maybe broader market data (trend info), calls the API, and returns the parsed
+{ score, reason }. Also handles any errors/timeouts (maybe retries or default). - notifier.js : Wraps the
+Telegram bot sending. Has a function sendSignalAlert(signal, aiScore, aiReason) and others
+like sendStatus(update) , etc. This module would initialize the TelegramBot instance. It may also
+maintain state like the chatId to use. - database.js or models/ : Mongoose setup and schema
+definitions (SignalModel, CandleModel, etc.). Provide simple functions like logSignal(signal) and
+updateSignalOutcome(id, outcome) .
+Control Flow:
+app.js
+on each poll does: 1. Fetch latest data (dataFetcher). 2. Update indicators
+(indicatorCalc). 3. If time within session, evaluate strategy (strategy). 4. If strategy returns a signal: -
+Compute R:R and prepare SL/TP. - Call AI evaluator to get confidence. - If confidence is high enough: * Log
+the signal to DB. * Call notifier to send Telegram alert. * Mark this trade as active (for tracking). - If
+confidence too low: maybe log “signal dropped due to low AI score” and do nothing (or possibly notify
+something like “AI advised against a weak setup, no trade” if we want, but likely not necessary to avoid
+noise). 5. Else, no signal – do nothing (maybe later we could have the bot send something like “no signals so
+far” after some hours, but probably unnecessary). 6. End of day: if any active trade, send close alerts,
+update DB outcomes. Possibly send summary. 7. Repeat next day.
+We also incorporate safety checks: e.g., don’t send duplicate alerts for the same signal. We can maintain a
+flag if a signal was already sent this candle to avoid spamming if our loop runs quickly. We can also ensure
+19only one trade at a time (depending on strategy we might want just one open trade; if so, after a signal
+triggers, we pause new signals until that one closes – this can be a configuration).
+Libraries and Versions: We will pin versions of any crucial library (technical indicators lib, axios, mongoose,
+telegram bot lib) to avoid unexpected changes. Since the user is a Node dev, they can maintain it.
+Coding Best Practices: - Use async/await for API calls for readability. - Handle exceptions around external
+calls (API or DB) so one failure doesn’t crash the app. Use try/catch and maybe a global uncaught exception
+handler to restart loop if needed. - Logging: Use console.log or a logging library to record important
+events (e.g., “Signal generated: ...”, “AI score: ...”, “Sent Telegram message”). If running in background, logs
+can be written to a file for later inspection. But avoid logging sensitive info (API keys). - Configurability: Key
+parameters (like session hours, indicator periods, AI threshold, symbol to trade) should be easy to adjust.
+We can put them at top of a config file or environment variables. E.g. process.env.SYMBOL or a config.json
+that user can edit. - Testing: We will test each module in isolation where possible: - For indicatorCalc, feed it
+known candle data and compare indicator outputs to a known library or TradingView. - For strategy, create
+scenarios to ensure it returns signals correctly (we might simulate a trending scenario vs ranging scenario
+to see if it skips). - AI integration: test the prompt and see if we parse the result correctly (maybe initially test
+with a smaller model or few calls due to potential cost, but Google’s free tier is okay). - Telegram: test by
+running the bot and issuing a dummy command or sending a dummy signal to ourselves.
+Backtesting (not in real-time operation, but as a development tool): Because we log signals and have price
+data, we can later backtest or at least hindsight-test the strategy. We could write a script to simulate past
+days using recorded data or by pulling historical data to see how many signals would have triggered and
+results. This step is crucial to refine thresholds (like ADX cutoff or ATR multipliers) before fully trusting live
+signals. The plan is research-backed, but real market behavior may necessitate tweaks.
+Security: Since this is personal, and no exchange account keys are used (data is public, and we aren’t auto-
+trading), security concerns are minimal. Just protect the Telegram bot token and Gemini API key. We might
+restrict Telegram bot to only respond in the known chat (check chat id) so random people can’t use it if they
+find the token.
+Scalability: The plan is for one user, one or few symbols. If later expanding to multiple symbols, we’d have
+to manage multiple data streams and ensure not to overwhelm the AI with too many requests (maybe
+sequentialize or batch them). But for now, single-symbol focus is fine.
+Finally, we will maintain consistency and patience with this system. As any experienced trader knows,
+sticking to the strategy and not deviating is key. The bot helps enforce that by being systematic and rule-
+based (plus AI oversight for discipline). Multi-timeframe approach should improve reward/risk as intended
+39 and the limited number of trades prevents overtrading.
+In conclusion, this implementation plan details a robust approach to generate intraday crypto trade signals
+using free data and AI resources. By combining strong technical analysis foundations with modern AI and
+delivering signals through a convenient Telegram interface, the tool aims to provide the user a disciplined,
+high-confidence trading assistant. Following best practices in development and strategy validation 2 22
+will ensure the system is reliable and effective in live conditions.
+201
+What is Intraday Trading? Detailed Guide with Examples
+https://www.atfx.com/en/analysis/trading-strategies/what-is-intraday-trading
+2
+Mastering Swing Trading: 27 Essential Rules for Success | Bulls On Wall Street
+https://www.bullsonwallstreet.com/post/mastering-swing-trading-27-essential-rules-for-success
+3
+8
+9
+10
+36
+38
+How to day trade crypto using Google’s Gemini AI — TradingView News
+https://www.tradingview.com/news/cointelegraph:070e6644d094b:0-how-to-day-trade-crypto-using-google-s-gemini-ai/
+4
+Exploring the Best Trading Signals npm Libraries for Technical Analysis – Elevating Forex
+https://elevatingforex.com/trading-signals-npm/
+GitHub - danilobatson/ai-trading-agent-gemini: AI Trading Agent that transforms social media sentiment
+into actionable trading signals using LunarCrush analytics and Google Gemini AI. Features real-time
+progress tracking, background job processing with Inngest, and live dashboard updates via Supabase
+subscriptions. Built with Next.js 15, TypeScript, and modern AI integration patterns.
+5
+https://github.com/danilobatson/ai-trading-agent-gemini
+6
+7
+37
+Gemini API quickstart | Google AI for Developers
+https://ai.google.dev/gemini-api/docs/quickstart
+11
+12
+13
+39
+How To Perform A Multi TimeFrame Analysis + 5 Strategies
+https://tradeciety.com/how-to-perform-a-multiple-time-frame-analysis
+14
+15
+16
+17
+24
+ADX: The Trend Strength Indicator
+https://www.investopedia.com/articles/trading/07/adx-trend-indicator.asp
+18
+19
+20
+21
+22
+23
+25
+26
+27
+31
+32
+33
+34
+VWAP-MACD-RSI Multi-Factor Quantitative Trading Strategy |
+by Sword Red | Medium
+https://medium.com/@redsword_23261/vwap-macd-rsi-multi-factor-quantitative-trading-strategy-c65a95a2b04a
+28
+Forex Market Hours - Myfxbook.com
+https://www.myfxbook.com/market-hours
+29
+How Global Markets and Time Zones Influence 24-Hour Trading
+https://www.investopedia.com/how-global-markets-and-time-zones-influence-24-hour-trading-11757445
+30 Why Asian, New York, and London Times Matter in Crypto Trading | by Muhammad Zain ul Abideen |
+Medium
+https://medium.com/@mzain10/why-asian-new-york-and-london-times-matter-in-crypto-trading-c00ad9dfe8e9
+35
+If you haven't explored the power of risk management & dedicate ...
+https://x.com/ElliottForecast/status/1967778320826986545
+21
