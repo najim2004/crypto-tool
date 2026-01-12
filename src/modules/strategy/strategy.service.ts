@@ -131,14 +131,23 @@ export class StrategyService {
       const entry = lastClose5m;
       const riskParams = await aiService.assessRiskParameters(entry, ind5m.atr, 'LONG');
       const stopLoss = entry - ind5m.atr * riskParams.stopLossMultiplier;
-      const takeProfit = entry + ind5m.atr * riskParams.takeProfitMultiplier;
+
+      // Calculate split TPs (TP1 at 50% of the target, TP2 at 100%)
+      const totalTarget = ind5m.atr * riskParams.takeProfitMultiplier;
+      const tp1 = entry + totalTarget * 0.6; // Slightly more than half for safety
+      const tp2 = entry + totalTarget;
 
       return {
         symbol: symbol,
         direction: 'LONG',
         entryPrice: entry,
+        entryRange: {
+          min: entry * 0.9995, // 0.05% buffer below
+          max: entry * 1.0005, // 0.05% buffer above
+        },
         stopLoss,
-        takeProfit,
+        takeProfit: tp2, // Main TP
+        takeProfits: { tp1, tp2 },
         timestamp: new Date(),
         status: 'OPEN',
       };
@@ -154,14 +163,22 @@ export class StrategyService {
       const entry = lastClose5m;
       const riskParams = await aiService.assessRiskParameters(entry, ind5m.atr, 'SHORT');
       const stopLoss = entry + ind5m.atr * riskParams.stopLossMultiplier;
-      const takeProfit = entry - ind5m.atr * riskParams.takeProfitMultiplier;
+
+      const totalTarget = ind5m.atr * riskParams.takeProfitMultiplier;
+      const tp1 = entry - totalTarget * 0.6;
+      const tp2 = entry - totalTarget;
 
       return {
         symbol: symbol,
         direction: 'SHORT',
         entryPrice: entry,
+        entryRange: {
+          min: entry * 1.0005, // Buffer above for short
+          max: entry * 0.9995, // Buffer below for short
+        },
         stopLoss,
-        takeProfit,
+        takeProfit: tp2,
+        takeProfits: { tp1, tp2 },
         timestamp: new Date(),
         status: 'OPEN',
       };

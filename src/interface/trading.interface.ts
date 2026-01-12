@@ -13,8 +13,16 @@ export interface Signal {
   symbol: string;
   direction: 'LONG' | 'SHORT';
   entryPrice: number;
+  entryRange?: {
+    min: number;
+    max: number;
+  };
   stopLoss: number;
-  takeProfit: number;
+  takeProfit: number; // For backward compatibility / primary TP
+  takeProfits?: {
+    tp1: number;
+    tp2: number;
+  };
   timestamp: Date;
   aiScore?: number;
   aiReason?: string;
