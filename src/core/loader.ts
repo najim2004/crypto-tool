@@ -12,7 +12,7 @@ export class CoreLoader {
     // Poll every 1 minute
     setInterval(() => {
       this.poll().catch((err: Error) => logger.error(`Polling Error: ${err.message}`));
-    }, 60000);
+    }, 10000);
 
     this.poll().catch((err: Error) => logger.error(`Initial Polling Error: ${err.message}`));
 
@@ -33,40 +33,44 @@ export class CoreLoader {
 
     try {
       logger.info('🔍 Evaluating market conditions...');
-      const signal = await strategyService.evaluate();
+      const signals = await strategyService.evaluateAll();
 
-      if (signal) {
-        logger.info('🎯 Signal detected! Requesting AI evaluation...');
-        const aiResult = await aiService.scoreSignal(
-          signal,
-          'Technical confluence on 1H/15m/5m timeframes.'
-        );
+      for (const signal of signals) {
+        if (signal) {
+          logger.info(`🎯 Signal detected for ${signal.symbol}! Requesting AI evaluation...`);
+          const aiResult = await aiService.scoreSignal(
+            signal,
+            'Technical confluence on 1H/15m/5m timeframes.'
+          );
 
-        if (aiResult.score >= 70) {
-          signal.aiScore = aiResult.score;
-          signal.aiReason = aiResult.reason;
+          if (aiResult.score >= 70) {
+            signal.aiScore = aiResult.score;
+            signal.aiReason = aiResult.reason;
 
-          // Save to DB
-          await SignalModel.create({
-            symbol: signal.symbol,
-            direction: signal.direction,
-            entryPrice: signal.entryPrice,
-            stopLoss: signal.stopLoss,
-            takeProfit: signal.takeProfit,
-            timestamp: signal.timestamp,
-            aiScore: aiResult.score,
-            aiReason: aiResult.reason,
-            status: 'OPEN',
-          });
+            // Save to DB
+            await SignalModel.create({
+              symbol: signal.symbol,
+              direction: signal.direction,
+              entryPrice: signal.entryPrice,
+              stopLoss: signal.stopLoss,
+              takeProfit: signal.takeProfit,
+              timestamp: signal.timestamp,
+              aiScore: aiResult.score,
+              aiReason: aiResult.reason,
+              status: 'OPEN',
+            });
 
-          // Send Notification
-          await telegramService.sendSignal(signal);
-          logger.info('✅ Signal sent to Telegram and saved to database.');
-        } else {
-          logger.info(`⚠️ Signal discarded by AI (Score: ${aiResult.score})`);
+            // Send Notification
+            await telegramService.sendSignal(signal);
+            logger.info(`✅ [${signal.symbol}] Signal sent to Telegram and saved to database.`);
+          } else {
+            logger.info(`⚠️ [${signal.symbol}] Signal discarded by AI (Score: ${aiResult.score})`);
+          }
         }
-      } else {
-        logger.info('😴 No valid signal found in this cycle.');
+      }
+
+      if (signals.length === 0) {
+        logger.info('😴 No valid signals found in this cycle.');
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error';

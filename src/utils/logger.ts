@@ -1,5 +1,5 @@
-import {pino} from 'pino';
-import config from '../config/index';
+import { pino } from 'pino';
+import config from '../config/index.js';
 
 const logger = pino(
   config.node_env === 'development'
@@ -12,8 +12,8 @@ const logger = pino(
         },
       }
     : {
-      level: 'info'
-    },
+        level: 'info',
+      }
 );
 
 export default logger;

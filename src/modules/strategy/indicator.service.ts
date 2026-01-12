@@ -1,4 +1,4 @@
-import { EMA, RSI, MACD, ATR } from 'trading-signals';
+import { EMA, RSI, MACD, ATR, ADX, SMA } from 'trading-signals';
 import { Candle } from '../../interface/trading.interface.js';
 
 export interface IndicatorValues {
@@ -12,6 +12,8 @@ export interface IndicatorValues {
   };
   atr: number;
   vwap: number;
+  adx: number;
+  volumeSMA: number;
 }
 
 export class IndicatorService {
@@ -26,6 +28,8 @@ export class IndicatorService {
     // Correcting MACD constructor: All parameters should be Indicator instances if required
     const macd = new MACD(new EMA(12), new EMA(26), new EMA(9));
     const atr14 = new ATR(14);
+    const adx14 = new ADX(14);
+    const volumeSMA20 = new SMA(20);
 
     let vwapSum = 0;
     let vwapVolume = 0;
@@ -43,6 +47,15 @@ export class IndicatorService {
         },
         false
       );
+      adx14.update(
+        {
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        },
+        false
+      );
+      volumeSMA20.update(candle.volume, false);
 
       vwapSum += candle.close * candle.volume;
       vwapVolume += candle.volume;
@@ -53,6 +66,8 @@ export class IndicatorService {
     const rsiRes = rsi14.getResult();
     const macdResult = macd.getResult();
     const atrResult = atr14.getResult();
+    const adxResult = adx14.getResult();
+    const volumeSMAResult = volumeSMA20.getResult();
 
     return {
       ema50: ema50Res ? parseFloat(ema50Res.toString()) : 0,
@@ -65,6 +80,8 @@ export class IndicatorService {
       },
       atr: atrResult ? parseFloat(atrResult.toString()) : 0,
       vwap: vwapVolume > 0 ? vwapSum / vwapVolume : 0,
+      adx: adxResult ? parseFloat(adxResult.toString()) : 0,
+      volumeSMA: volumeSMAResult ? parseFloat(volumeSMAResult.toString()) : 0,
     };
   }
 

@@ -21,14 +21,33 @@ export class BinanceService {
         },
       });
 
-      // Binance returns an array of arrays
-      return response.data.map((k: Array<string | number>) => ({
-        time: k[0] as number,
-        open: parseFloat(k[1] as string),
-        high: parseFloat(k[2] as string),
-        low: parseFloat(k[3] as string),
-        close: parseFloat(k[4] as string),
-        volume: parseFloat(k[5] as string),
+      // Binance returns an array of arrays. Format:
+      // [
+      //   1499040000000,      // Open time
+      //   "0.01634790",       // Open
+      //   "0.80000000",       // High
+      //   "0.01575800",       // Low
+      //   "0.01577100",       // Close
+      //   "148976.11427815",  // Volume
+      //   ...
+      // ]
+      type BinanceKline = [
+        number, // Open time
+        string, // Open
+        string, // High
+        string, // Low
+        string, // Close
+        string, // Volume
+        ...unknown[], // Other fields ignored
+      ];
+
+      return (response.data as BinanceKline[]).map(k => ({
+        time: k[0],
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+        volume: parseFloat(k[5]),
       }));
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';

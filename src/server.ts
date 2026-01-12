@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import app from './app';
-import config from './config/index';
-import logger from './utils/logger';
-import globalErrorHandler from './middlewares/globalErrorHandler';
-import notFound from './middlewares/notFound';
+import app from './app.js';
+import config from './config/index.js';
+import logger from './utils/logger.js';
+import globalErrorHandler from './middlewares/globalErrorHandler.js';
+import notFound from './middlewares/notFound.js';
 
 async function bootstrap(): Promise<void> {
   try {
