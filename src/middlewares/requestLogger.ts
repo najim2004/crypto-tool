@@ -1,4 +1,4 @@
-import pinoHttp from 'pino-http';
+import { pinoHttp } from 'pino-http';
 import logger from '../utils/logger.js';
 import config from '../config/index.js';
 import { IncomingMessage, ServerResponse } from 'http';
