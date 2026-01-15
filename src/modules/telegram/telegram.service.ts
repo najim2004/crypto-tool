@@ -125,9 +125,17 @@ export class TelegramService {
       return;
     }
 
+    // Dynamic precision helper: if price < 1, use 6 decimals, else 2 or 4 based on value
+    const formatPrice = (price: number) => {
+      if (price < 0.001) return price.toFixed(8);
+      if (price < 1) return price.toFixed(6);
+      if (price < 10) return price.toFixed(4);
+      return price.toFixed(2);
+    };
+
     const entryArea = signal.entryRange
-      ? `${signal.entryRange.min.toFixed(4)} - ${signal.entryRange.max.toFixed(4)}`
-      : signal.entryPrice.toFixed(4);
+      ? `${formatPrice(signal.entryRange.min)} - ${formatPrice(signal.entryRange.max)}`
+      : formatPrice(signal.entryPrice);
 
     const timeStr = new Intl.DateTimeFormat('en-GB', {
       dateStyle: 'medium',
@@ -135,13 +143,16 @@ export class TelegramService {
       timeZone: 'UTC',
     }).format(signal.timestamp);
 
+    const typeTag = signal.quality === 'PRIME' ? '🔥 *PRIME SIGNAL*' : '✅ *STANDARD SIGNAL*';
+
     const message = `
-🚀 *${signal.direction} Signal: ${signal.symbol}*
+${typeTag}
+🚀 *${signal.direction}: ${signal.symbol}*
 ━━━━━━━━━━━━━━━━━━
 📥 *Entry Zone:* ${entryArea}
-🎯 *TP 1:* ${signal.takeProfits?.tp1.toFixed(4) || 'N/A'}
-🎯 *TP 2:* ${signal.takeProfits?.tp2.toFixed(4) || 'N/A'}
-🛑 *Stop Loss:* ${signal.stopLoss.toFixed(4)}
+🎯 *TP 1:* ${signal.takeProfits?.tp1 ? formatPrice(signal.takeProfits.tp1) : 'N/A'}
+🎯 *TP 2:* ${signal.takeProfits?.tp2 ? formatPrice(signal.takeProfits.tp2) : 'N/A'}
+🛑 *Stop Loss:* ${formatPrice(signal.stopLoss)}
 📊 *AI Confidence:* ${signal.aiScore ?? 'N/A'}/100
 ⏰ *Time:* ${timeStr} UTC
 

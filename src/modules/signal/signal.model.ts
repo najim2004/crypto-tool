@@ -18,12 +18,26 @@ const signalSchema = new Schema(
     timestamp: { type: Date, default: Date.now },
     aiScore: { type: Number },
     aiReason: { type: String },
+    quality: { type: String, enum: ['PRIME', 'STANDARD'], default: 'STANDARD' },
     status: {
       type: String,
       enum: ['OPEN', 'HIT_TP', 'HIT_SL', 'CLOSED_EOD'],
       default: 'OPEN',
     },
     pnl: { type: Number },
+    technicalContext: {
+      rsi: {
+        '1h': Number,
+        '15m': Number,
+        '5m': Number,
+      },
+      adx: Number,
+      volumeRatio: Number,
+      trend: String,
+      regime: String,
+      delta: Number,
+      whaleActivity: Boolean,
+    },
   },
   {
     timestamps: true,

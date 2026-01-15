@@ -8,9 +8,10 @@ dotenv.config();
 export class AIService {
   private genAI: GoogleGenerativeAI | null = null;
   private models: string[] = [
-    // 'gemini-3-pro-preview',
-    // 'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
+    'gemini-3-flash-preview',
     'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
     'gemini-2.5-pro',
   ];
 
@@ -27,11 +28,11 @@ export class AIService {
       logger.warn(
         '⚠️ AI Scoring unavailable (No API Key configured). Using technical analysis only.'
       );
-      return { score: 75, reason: 'Technical confluence detected - AI scoring unavailable' };
+      return { score: 75, reason: 'টেকনিক্যাল সিগন্যাল শনাক্ত হয়েছে - AI সাময়িকভাবে অনুপলব্ধ' };
     }
 
     const prompt = `
-      Analyze the following crypto trade setup and respond with a confidence score (0-100) and brief reasoning.
+      Analyze the following crypto trade setup and respond with a confidence score (0-100) and brief reasoning IN BANGLA (Bengali language).
       
       Market: ${signal.symbol}
       Direction: ${signal.direction}
@@ -42,7 +43,8 @@ export class AIService {
       Technical Context:
       ${context}
       
-      Respond in JSON format: { "score": number, "reason": "string" }
+      IMPORTANT: Respond in Bangla with a SHORT explanation (1-2 sentences).
+      Response format (JSON): { "score": number, "reason": "string in Bangla" }
     `;
 
     // Try each model until one works
@@ -71,7 +73,7 @@ export class AIService {
 
     // All models failed, use fallback
     logger.warn('⚠️ All AI models failed, using technical analysis fallback');
-    return { score: 75, reason: 'Technical confluence detected - AI temporarily unavailable' };
+    return { score: 75, reason: 'টেকনিক্যাল সিগন্যাল শনাক্ত হয়েছে - AI সাময়িকভাবে অনুপলব্ধ' };
   }
 
   async analyzeMarketRegime(

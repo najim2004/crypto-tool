@@ -5,9 +5,11 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  takerBuyVolume?: number;
+  tradeCount?: number;
 }
 
-export type Interval = '5m' | '15m' | '1h';
+export type Interval = '5m' | '15m' | '1h' | '4h';
 
 export interface Signal {
   symbol: string;
@@ -26,5 +28,15 @@ export interface Signal {
   timestamp: Date;
   aiScore?: number;
   aiReason?: string;
+  quality?: 'PRIME' | 'STANDARD';
+  technicalContext?: {
+    rsi: { '1h': number; '15m': number; '5m': number };
+    adx: number;
+    volumeRatio: number;
+    trend: string;
+    regime?: string;
+    delta?: number;
+    whaleActivity?: boolean;
+  };
   status: 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CLOSED_EOD';
 }
