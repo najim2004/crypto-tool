@@ -18,7 +18,7 @@ const signalSchema = new Schema(
     timestamp: { type: Date, default: Date.now },
     aiScore: { type: Number },
     aiReason: { type: String },
-    quality: { type: String, enum: ['PRIME', 'STANDARD'], default: 'STANDARD' },
+    quality: { type: String, enum: ['PREMIUM', 'STANDARD'], default: 'STANDARD' },
     status: {
       type: String,
       enum: ['OPEN', 'HIT_TP', 'HIT_SL', 'CLOSED_EOD'],

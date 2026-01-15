@@ -16,9 +16,9 @@ graph TD
         F --> G[Detect Market Regime]
         
         G -->|CHOPPY| H[⛔ Filter: Discard]
-        G -->|TRENDING / RANGING| I{Check Tier: PRIME}
+        G -->|TRENDING / RANGING| I{Check Tier: PREMIUM}
         
-        I -- Pass --> J[🔥 Generate PRIME Signal]
+        I -- Pass --> J[🔥 Generate PREMIUM Signal]
         I -- Fail --> K{Check Tier: STANDARD}
         
         K -- Pass --> L[✅ Generate STANDARD Signal]
@@ -60,9 +60,9 @@ This is the brain of the operation. It processes each symbol (e.g., BTCUSDT) thr
 *   **Action:** If `CHOPPY`, the signal is immediately **discarded**.
 
 #### **Step C: Signal Tier Check (Dual-Pass)**
-The system tries to generate a **PRIME** signal first. If that fails, it tries for a **STANDARD** signal.
+The system tries to generate a **PREMIUM** signal first. If that fails, it tries for a **STANDARD** signal.
 
-| Feature | **🔥 PRIME (Strict)** | **✅ STANDARD (Relaxed)** |
+| Feature | **🔥 PREMIUM (Strict)** | **✅ STANDARD (Relaxed)** |
 | :--- | :--- | :--- |
 | **Trend Strength** | ADX > **25** | ADX > **20** |
 | **RSI Range** | Stricter (e.g., 50-65 for Long) | Wider (e.g., 40-70 for Long) |
@@ -73,7 +73,7 @@ The system tries to generate a **PRIME** signal first. If that fails, it tries f
 #### **Step D: Quantitative Order Flow**
 *   **Delta:** Calculates `Buying Pressure` (Taker Buy Vol - Sell Vol).
 *   **Whale Detector:** Checks `Trade Intensity` (High Vol + Low Count = Whale).
-*   **Usage:** PRIME signals **require** Order Flow confirmation (e.g., Long Signal + Positive Delta).
+*   **Usage:** PREMIUM signals **require** Order Flow confirmation (e.g., Long Signal + Positive Delta).
 
 ### 3. **AI Validation (`ai.service.ts`)**
 *   **Input:** The raw signal + Technical Context (RSI values, Trend status, Regime, Delta).
@@ -91,8 +91,8 @@ The system tries to generate a **PRIME** signal first. If that fails, it tries f
 1.  **Is Market Choppy?**
     *   **True** ➔ 🛑 STOP
     *   **False** ➔ Continue
-2.  **Is Signal PRIME Quality?**
-    *   **True** ➔ ✅ Mark as PRIME
+2.  **Is Signal PREMIUM Quality?**
+    *   **True** ➔ ✅ Mark as PREMIUM
     *   **False** ➔ Check STANDARD Quality
 3.  **Is Signal STANDARD Quality?**
     *   **True** ➔ ✅ Mark as STANDARD

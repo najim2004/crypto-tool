@@ -143,7 +143,7 @@ export class TelegramService {
       timeZone: 'UTC',
     }).format(signal.timestamp);
 
-    const typeTag = signal.quality === 'PRIME' ? '🔥 *PRIME SIGNAL*' : '✅ *STANDARD SIGNAL*';
+    const typeTag = signal.quality === 'PREMIUM' ? '🔥 *PREMIUM SIGNAL*' : '✅ *STANDARD SIGNAL*';
 
     const message = `
 ${typeTag}

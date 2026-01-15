@@ -28,7 +28,7 @@ export interface Signal {
   timestamp: Date;
   aiScore?: number;
   aiReason?: string;
-  quality?: 'PRIME' | 'STANDARD';
+  quality?: 'PREMIUM' | 'STANDARD';
   technicalContext?: {
     rsi: { '1h': number; '15m': number; '5m': number };
     adx: number;

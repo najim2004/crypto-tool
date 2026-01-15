@@ -121,8 +121,8 @@ export class StrategyService {
     }
 
     // --- HELPER: Evaluation for a specific tier ---
-    const checkTier = (tier: 'PRIME' | 'STANDARD'): Signal | null => {
-      const isStrict = tier === 'PRIME';
+    const checkTier = (tier: 'PREMIUM' | 'STANDARD'): Signal | null => {
+      const isStrict = tier === 'PREMIUM';
 
       // 1. Trend Filter
       // Strict: ADX > 25, RSI Strict
@@ -156,14 +156,14 @@ export class StrategyService {
         return null;
       }
 
-      // 3. PRIME Quantitative Confirmations
-      if (tier === 'PRIME') {
+      // 3. PREMIUM Quantitative Confirmations
+      if (tier === 'PREMIUM') {
         // Trend alignment check (existing)
         const close4h = klines4h[klines4h.length - 1].close;
         const ind4h = indicatorService.computeIndicators(klines4h);
         const trend4h = close4h > ind4h.ema50 ? 'UP' : 'DOWN';
         if (trend1h !== trend4h) {
-          logger.info(`⚠️ [PRIME] ${symbol}: Trend Mismatch`);
+          logger.info(`⚠️ [PREMIUM] ${symbol}: Trend Mismatch`);
           return null;
         }
 
@@ -172,13 +172,13 @@ export class StrategyService {
         // If SHORT, we want negative delta (Selling Pressure)
         if (trend1h === 'UP' && delta < 0) {
           logger.info(
-            `⚠️ [PRIME] ${symbol}: Negative Delta on Bullish Signal (${delta.toFixed(2)})`
+            `⚠️ [PREMIUM] ${symbol}: Negative Delta on Bullish Signal (${delta.toFixed(2)})`
           );
           return null;
         }
         if (trend1h === 'DOWN' && delta > 0) {
           logger.info(
-            `⚠️ [PRIME] ${symbol}: Positive Delta on Bearish Signal (${delta.toFixed(2)})`
+            `⚠️ [PREMIUM] ${symbol}: Positive Delta on Bearish Signal (${delta.toFixed(2)})`
           );
           return null;
         }
@@ -347,10 +347,10 @@ export class StrategyService {
     };
 
     // --- EVALUATION ---
-    // 1. Try PRIME (Strict)
-    const primeSignal = checkTier('PRIME');
+    // 1. Try PREMIUM (Strict)
+    const primeSignal = checkTier('PREMIUM');
     if (primeSignal) {
-      logger.info(`🔥 [PRIME] ${symbol} Signal Found!`);
+      logger.info(`🔥 [PREMIUM] ${symbol} Signal Found!`);
       return primeSignal;
     }
 
