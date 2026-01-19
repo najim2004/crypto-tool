@@ -1,5 +1,6 @@
 import { EMA, RSI, MACD, ATR, ADX, SMA } from 'trading-signals';
 import { Candle } from '../../interface/trading.interface.js';
+import { volatilityService, momentumMathService } from '../math/index.js';
 
 export interface IndicatorValues {
   ema50: number;
@@ -15,6 +16,16 @@ export interface IndicatorValues {
   adx: number;
   volumeSMA: number;
   stochRSI: {
+    k: number;
+    d: number;
+  };
+  bollinger: {
+    upper: number;
+    lower: number;
+    percentB: number;
+    squeeze: boolean;
+  };
+  stochastic: {
     k: number;
     d: number;
   };
@@ -76,6 +87,9 @@ export class IndicatorService {
     const volumeSMAResult = volumeSMA20.getResult();
     // const stochRes = stochRSI.getResult();
 
+    const bollinger = volatilityService.calculateBollingerBands(candles, 20, 2);
+    const stochastic = momentumMathService.calculateStochastic(candles, 14, 3, 3);
+
     return {
       ema50: ema50Res ? parseFloat(ema50Res.toString()) : 0,
       ema20: ema20Res ? parseFloat(ema20Res.toString()) : 0,
@@ -92,6 +106,16 @@ export class IndicatorService {
       stochRSI: {
         k: 50, // Placeholder to prevent crash
         d: 50,
+      },
+      bollinger: {
+        upper: bollinger.upper,
+        lower: bollinger.lower,
+        percentB: bollinger.percentB,
+        squeeze: bollinger.bandwidth < 10, // Arbitrary squeeze threshold, refine later
+      },
+      stochastic: {
+        k: stochastic.k,
+        d: stochastic.d,
       },
     };
   }

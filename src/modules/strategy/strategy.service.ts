@@ -2,6 +2,7 @@ import { binanceService } from '../binance/binance.service.js';
 import { indicatorService } from './indicator.service.js';
 import { marketRegimeService } from './market-regime.service.js';
 import { orderFlowService } from './order-flow.service.js';
+import { pivotService, fibonacciService, moneyManagementService } from '../math/index.js';
 import { Signal, Candle } from '../../interface/trading.interface.js';
 import { Formatter } from '../../utils/formatter.js';
 import logger from '../../utils/logger.js';
@@ -69,7 +70,7 @@ export class StrategyService {
     return signals;
   }
 
-  private async evaluateSymbol(symbol: string): Promise<Signal | null> {
+  async evaluateSymbol(symbol: string): Promise<Signal | null> {
     // Helper to remove incomplete candle
     const sanitizeKlines = (data: Candle[], durationMs: number): Candle[] => {
       const last = data[data.length - 1];
@@ -256,20 +257,21 @@ export class StrategyService {
         }
 
         // Passed! Construct Signal
+        // Passed! Construct Signal
         const entry = lastClose5m;
         const stopLoss = entry - ind5m.atr * 2;
         const totalTarget = ind5m.atr * 6;
         const tp1 = entry + totalTarget * 0.6;
         const tp2 = entry + totalTarget;
 
-        return {
+        const baseSignal: Signal = {
           symbol,
           direction: 'LONG',
           quality: tier,
           entryPrice: entry,
           entryRange: { min: entry * 0.9995, max: entry * 1.0005 },
           stopLoss,
-          takeProfit: tp2,
+          takeProfit: tp2, // Legacy field
           takeProfits: { tp1, tp2 },
           timestamp: new Date(),
           status: 'OPEN',
@@ -281,8 +283,49 @@ export class StrategyService {
             regime: regime.type,
             delta: parseFloat(delta.toFixed(2)),
             whaleActivity: isWhaleActive,
+            bollinger: ind5m.bollinger,
+            stochastic: ind5m.stochastic,
+            pivots: {
+              current: 'Analyzing...',
+              nextSupport: 0,
+              nextResistance: 0,
+            },
           },
         };
+
+        // --- ENRICHMENT WITH ADVANCED MATH ---
+        // 1. Pivot Points
+        const pivots = pivotService.calculateStandardPivots(
+          Math.max(...klines1h.slice(-24).map(k => k.high)), // Daily High approx
+          Math.min(...klines1h.slice(-24).map(k => k.low)), // Daily Low approx
+          klines1h[klines1h.length - 1].close
+        );
+        const pivotLevels = pivotService.findNearestLevels(lastClose5m, pivots);
+
+        if (baseSignal.technicalContext?.pivots) {
+          baseSignal.technicalContext.pivots.nextSupport = pivotLevels.nearestSupport;
+          baseSignal.technicalContext.pivots.nextResistance = pivotLevels.nearestResistance;
+          baseSignal.technicalContext.pivots.current =
+            lastClose5m > pivots.p ? 'Above Pivot' : 'Below Pivot';
+        }
+
+        // 2. Fibonacci Retracements (Context)
+        // Using Daily High/Low for broad context
+        const fibLevels = fibonacciService.calculateRetracements(
+          Math.max(...klines1h.slice(-24).map(k => k.high)),
+          Math.min(...klines1h.slice(-24).map(k => k.low)),
+          lastClose5m,
+          'UP' // Assume UP trend for calculation relative to High
+        );
+        // Log closest level (simplification)
+        logger.info(`[FIB] ${symbol} Near 0.618 Level: ${fibLevels.level618.toFixed(4)}`);
+
+        // 2. Kelly Criterion (Optional log)
+        // Assume 55% win rate, 2:1 Reward:Risk
+        const kellySize = moneyManagementService.calculateKellyPosition(0.55, 2.0);
+        logger.info(`[KELLY] Calculated Position Size: ${(kellySize * 100).toFixed(2)}%`);
+
+        return baseSignal;
       } else {
         // DOWN
         if (!validRsiShort) {
@@ -322,7 +365,7 @@ export class StrategyService {
         const tp1 = entry - totalTarget * 0.6;
         const tp2 = entry - totalTarget;
 
-        return {
+        const baseSignal: Signal = {
           symbol,
           direction: 'SHORT',
           quality: tier,
@@ -341,8 +384,45 @@ export class StrategyService {
             regime: regime.type,
             delta: parseFloat(delta.toFixed(2)),
             whaleActivity: isWhaleActive,
+            bollinger: ind5m.bollinger,
+            stochastic: ind5m.stochastic,
+            pivots: {
+              current: 'Analyzing...',
+              nextSupport: 0,
+              nextResistance: 0,
+            },
           },
         };
+
+        // --- ENRICHMENT WITH ADVANCED MATH (SHORT) ---
+        const pivots = pivotService.calculateStandardPivots(
+          Math.max(...klines1h.slice(-24).map(k => k.high)),
+          Math.min(...klines1h.slice(-24).map(k => k.low)),
+          klines1h[klines1h.length - 1].close
+        );
+        const pivotLevels = pivotService.findNearestLevels(lastClose5m, pivots);
+
+        if (baseSignal.technicalContext?.pivots) {
+          baseSignal.technicalContext.pivots.nextSupport = pivotLevels.nearestSupport;
+          baseSignal.technicalContext.pivots.nextResistance = pivotLevels.nearestResistance;
+          baseSignal.technicalContext.pivots.current =
+            lastClose5m > pivots.p ? 'Above Pivot' : 'Below Pivot';
+        }
+
+        // 2. Fibonacci Retracements
+        const fibLevels = fibonacciService.calculateRetracements(
+          Math.max(...klines1h.slice(-24).map(k => k.high)),
+          Math.min(...klines1h.slice(-24).map(k => k.low)),
+          lastClose5m,
+          'DOWN'
+        );
+        logger.info(`[FIB] ${symbol} Near 0.618 Level: ${fibLevels.level618.toFixed(4)}`);
+
+        // Log Kelly for debug/info
+        const kellySize = moneyManagementService.calculateKellyPosition(0.55, 2.0);
+        logger.info(`[KELLY] Calculated Position Size: ${(kellySize * 100).toFixed(2)}%`);
+
+        return baseSignal;
       }
     };
 

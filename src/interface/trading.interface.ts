@@ -9,7 +9,7 @@ export interface Candle {
   tradeCount?: number;
 }
 
-export type Interval = '5m' | '15m' | '1h' | '4h';
+export type Interval = '1m' | '5m' | '15m' | '1h' | '4h';
 
 export interface Signal {
   symbol: string;
@@ -37,6 +37,24 @@ export interface Signal {
     regime?: string;
     delta?: number;
     whaleActivity?: boolean;
+    bollinger?: {
+      upper: number;
+      lower: number;
+      percentB: number;
+      squeeze: boolean;
+    };
+    stochastic?: {
+      k: number;
+      d: number;
+    };
+    pivots?: {
+      current: string; // e.g., "Between P and R1"
+      nextSupport: number;
+      nextResistance: number;
+    };
   };
-  status: 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CLOSED_EOD';
+  status: 'OPEN' | 'HIT_TP1' | 'HIT_TP2' | 'HIT_SL' | 'EARLY_EXIT' | 'CLOSED_EOD';
+  exitPrice?: number;
+  exitReason?: string;
+  warnings?: string[];
 }

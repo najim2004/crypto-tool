@@ -1,4 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
+import { isMainThread, parentPort, workerData } from 'worker_threads';
 import { Signal } from '../../interface/trading.interface.js';
 import dotenv from 'dotenv';
 import logger from '../../utils/logger.js';
@@ -13,10 +14,13 @@ export class TelegramService {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     this.chatId = process.env.TELEGRAM_CHAT_ID || null;
 
-    if (token && token !== 'your_telegram_bot_token_here') {
+    // Only initialize bot in main thread
+    if (isMainThread && token && token !== 'your_telegram_bot_token_here') {
       this.bot = new TelegramBot(token, { polling: true });
       this.initCommands();
       logger.info('✅ Telegram Bot initialized with command support');
+    } else if (!isMainThread) {
+      logger.info(`✅ Telegram Service initialized in worker mode (proxying to main)`);
     }
   }
 
@@ -118,7 +122,137 @@ export class TelegramService {
     logger.info('✅ Telegram commands initialized');
   }
 
+  /**
+   * Send status update notification
+   */
+  async sendStatusUpdate(message: string): Promise<void> {
+    if (!isMainThread) {
+      this.forwardToMain('sendStatusUpdate', [message]);
+      return;
+    }
+
+    if (!this.bot || !this.chatId) {
+      logger.warn('⚠️ Telegram Bot not configured, skipping notification.');
+      return;
+    }
+
+    try {
+      await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`Error sending Telegram status update: ${errMsg}`);
+    }
+  }
+
+  /**
+   * Send early exit warning
+   */
+  async sendEarlyExitWarning(message: string): Promise<void> {
+    if (!isMainThread) {
+      this.forwardToMain('sendEarlyExitWarning', [message]);
+      return;
+    }
+
+    if (!this.bot || !this.chatId) {
+      logger.warn('⚠️ Telegram Bot not configured, skipping notification.');
+      return;
+    }
+
+    try {
+      await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`Error sending Telegram warning: ${errMsg}`);
+    }
+  }
+
+  /**
+   * Send TP hit notification
+   */
+  async sendTpHitNotification(
+    signal: Signal,
+    exitPrice: number,
+    tpLevel: 'TP1' | 'TP2'
+  ): Promise<void> {
+    if (!isMainThread) {
+      this.forwardToMain('sendTpHitNotification', [signal, exitPrice, tpLevel]);
+      return;
+    }
+
+    if (!this.bot || !this.chatId) {
+      logger.warn('⚠️ Telegram Bot not configured, skipping notification.');
+      return;
+    }
+
+    const pnlPercent = ((exitPrice - signal.entryPrice) / signal.entryPrice) * 100;
+    const emoji = tpLevel === 'TP2' ? '🎉🎉🎉' : '🎉';
+
+    const message = `
+${emoji} *${tpLevel} HIT!*
+━━━━━━━━━━━━━━━━━━
+🚀 *${signal.symbol}* ${signal.direction}
+
+💰 *Entry:* ${signal.entryPrice.toFixed(4)}
+🎯 *${tpLevel}:* ${exitPrice.toFixed(4)}
+📈 *Profit:* +${pnlPercent.toFixed(2)}%
+
+⏰ *Time:* ${new Date().toLocaleString('en-GB', { timeZone: 'UTC' })} UTC
+━━━━━━━━━━━━━━━━━━
+${tpLevel === 'TP2' ? '_Final target reached! Excellent trade!_' : '_Partial target reached! Consider trailing stop._'}
+    `.trim();
+
+    try {
+      await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`Error sending Telegram TP notification: ${errMsg}`);
+    }
+  }
+
+  /**
+   * Send SL hit notification
+   */
+  async sendSlHitNotification(signal: Signal, exitPrice: number): Promise<void> {
+    if (!isMainThread) {
+      this.forwardToMain('sendSlHitNotification', [signal, exitPrice]);
+      return;
+    }
+
+    if (!this.bot || !this.chatId) {
+      logger.warn('⚠️ Telegram Bot not configured, skipping notification.');
+      return;
+    }
+
+    const pnlPercent = ((exitPrice - signal.entryPrice) / signal.entryPrice) * 100;
+
+    const message = `
+🛑 *STOP LOSS HIT*
+━━━━━━━━━━━━━━━━━━
+📉 *${signal.symbol}* ${signal.direction}
+
+💰 *Entry:* ${signal.entryPrice.toFixed(4)}
+🛑 *Stop Loss:* ${exitPrice.toFixed(4)}
+📉 *Loss:* ${pnlPercent.toFixed(2)}%
+
+⏰ *Time:* ${new Date().toLocaleString('en-GB', { timeZone: 'UTC' })} UTC
+━━━━━━━━━━━━━━━━━━
+_Loss contained as planned. Stay disciplined._
+    `.trim();
+
+    try {
+      await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`Error sending Telegram SL notification: ${errMsg}`);
+    }
+  }
+
   async sendSignal(signal: Signal): Promise<void> {
+    if (!isMainThread) {
+      this.forwardToMain('sendSignal', [signal]);
+      return;
+    }
+
     if (!this.bot || !this.chatId) {
       logger.warn('⚠️ Telegram Bot not configured, skipping notification.');
       logger.info(`Offered Signal: ${JSON.stringify(signal)}`);
@@ -126,7 +260,7 @@ export class TelegramService {
     }
 
     // Dynamic precision helper: if price < 1, use 6 decimals, else 2 or 4 based on value
-    const formatPrice = (price: number) => {
+    const formatPrice = (price: number): string => {
       if (price < 0.001) return price.toFixed(8);
       if (price < 1) return price.toFixed(6);
       if (price < 10) return price.toFixed(4);
@@ -168,6 +302,23 @@ _Auto-generated by Antigravity Trading System_
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`Error sending Telegram message: ${errMsg}`);
     }
+  }
+
+  /**
+   * Helper to forward messages to main process
+   */
+  private forwardToMain(method: string, args: any[]): void {
+    if (!parentPort) return;
+
+    parentPort.postMessage({
+      type: 'TELEGRAM_FORWARD',
+      workerId: (workerData as any).workerId,
+      data: {
+        method,
+        args,
+      },
+      timestamp: Date.now(),
+    });
   }
 }
 

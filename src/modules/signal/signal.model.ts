@@ -21,10 +21,13 @@ const signalSchema = new Schema(
     quality: { type: String, enum: ['PREMIUM', 'STANDARD'], default: 'STANDARD' },
     status: {
       type: String,
-      enum: ['OPEN', 'HIT_TP', 'HIT_SL', 'CLOSED_EOD'],
+      enum: ['OPEN', 'HIT_TP1', 'HIT_TP2', 'HIT_SL', 'EARLY_EXIT', 'CLOSED_EOD'],
       default: 'OPEN',
     },
     pnl: { type: Number },
+    exitPrice: { type: Number },
+    exitReason: { type: String },
+    warnings: [{ type: String }],
     technicalContext: {
       rsi: {
         '1h': Number,
